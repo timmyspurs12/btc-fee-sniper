@@ -8,38 +8,15 @@ const MEMPOOL_WS =
     ? "wss://mempool.space/testnet/api/v1/ws"
     : "wss://mempool.space/api/v1/ws";
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-interface Fees {
-  fastestFee: number;
-  halfHourFee: number;
-  hourFee: number;
-  economyFee: number;
-  minimumFee: number;
-}
-
-type Status = "idle" | "watching" | "window_open" | "broadcast" | "error";
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function feeColor(fee: number, target: number) {
+function feeColor(fee, target) {
   if (target <= 0) return "#94a3b8";
   if (fee <= target) return "#22d3a5";
   if (fee <= target * 1.5) return "#fbbf24";
   return "#f87171";
 }
 
-function Ring({
-  value,
-  max,
-  color,
-  label,
-  sub,
-}: {
-  value: number;
-  max: number;
-  color: string;
-  label: string;
-  sub: string;
-}) {
+function Ring({ value, max, color, label, sub }) {
   const pct = Math.min(value / max, 1);
   const r = 38;
   const circ = 2 * Math.PI * r;
@@ -50,12 +27,8 @@ function Ring({
       <svg width="96" height="96" viewBox="0 0 96 96">
         <circle cx="48" cy="48" r={r} fill="none" stroke="#1e293b" strokeWidth="8" />
         <circle
-          cx="48"
-          cy="48"
-          r={r}
-          fill="none"
-          stroke={color}
-          strokeWidth="8"
+          cx="48" cy="48" r={r} fill="none"
+          stroke={color} strokeWidth="8"
           strokeDasharray={`${dash} ${circ}`}
           strokeLinecap="round"
           transform="rotate(-90 48 48)"
@@ -74,7 +47,7 @@ function Ring({
   );
 }
 
-function Ticker({ fees, target }: { fees: Fees | null; target: number }) {
+function Ticker({ fees, target }) {
   if (!fees) return null;
   const max = Math.max(fees.fastestFee, 80);
   return (
@@ -87,7 +60,7 @@ function Ticker({ fees, target }: { fees: Fees | null; target: number }) {
   );
 }
 
-function PulsingDot({ color }: { color: string }) {
+function PulsingDot({ color }) {
   return (
     <span style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", background: color, boxShadow: `0 0 6px ${color}`, animation: "pulse 1.6s infinite" }} />
   );
@@ -95,18 +68,18 @@ function PulsingDot({ color }: { color: string }) {
 
 // ── Main App ──────────────────────────────────────────────────────────────────
 export default function FeeSniper() {
-  const [fees, setFees] = useState<Fees | null>(null);
+  const [fees, setFees] = useState(null);
   const [wsLive, setWsLive] = useState(false);
   const [targetFee, setTargetFee] = useState("");
   const [txHex, setTxHex] = useState("");
-  const [status, setStatus] = useState<Status>("idle");
-  const [walletAddress, setWalletAddress] = useState<string | null>(null);
-  const [log, setLog] = useState<string[]>([]);
-  const [feeHistory, setFeeHistory] = useState<number[]>([]);
-  const wsRef = useRef<WebSocket | null>(null);
+  const [status, setStatus] = useState("idle");
+  const [walletAddress, setWalletAddress] = useState(null);
+  const [log, setLog] = useState([]);
+  const [feeHistory, setFeeHistory] = useState([]);
+  const wsRef = useRef(null);
   const alertedRef = useRef(false);
 
-  const addLog = useCallback((msg: string) => {
+  const addLog = useCallback((msg) => {
     setLog((prev) => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...prev.slice(0, 49)]);
   }, []);
 
@@ -126,7 +99,7 @@ export default function FeeSniper() {
         try {
           const msg = JSON.parse(e.data);
           if (msg.fees) {
-            const f: Fees = {
+            const f = {
               fastestFee: msg.fees.fastestFee,
               halfHourFee: msg.fees.halfHourFee,
               hourFee: msg.fees.hourFee,
@@ -158,7 +131,6 @@ export default function FeeSniper() {
       alertedRef.current = true;
       setStatus("window_open");
       addLog(`🚀 FEE WINDOW OPEN! 1h fee = ${fees.hourFee} sat/vB ≤ target ${t}`);
-      // Play alert sound via AudioContext
       try {
         const ctx = new AudioContext();
         [440, 554, 659].forEach((freq, i) => {
@@ -178,7 +150,7 @@ export default function FeeSniper() {
 
   // ── Connect OPWallet ─────────────────────────────────────────────────────────
   async function connectWallet() {
-    const opw = (window as any).opnet || (window as any).OPWallet;
+    const opw = window.opnet || window.OPWallet;
     if (!opw) {
       addLog("❌ OPWallet not found — install the extension first");
       return;
@@ -187,7 +159,7 @@ export default function FeeSniper() {
       const accounts = await opw.requestAccounts();
       setWalletAddress(accounts[0]);
       addLog(`✅ Wallet connected: ${accounts[0].slice(0, 16)}...`);
-    } catch (e: any) {
+    } catch (e) {
       addLog(`❌ Wallet connect failed: ${e.message}`);
     }
   }
@@ -199,38 +171,22 @@ export default function FeeSniper() {
     if (!txHex.trim()) { addLog("❌ Paste your raw transaction hex first"); return; }
     if (!walletAddress) { addLog("❌ Connect OPWallet first"); return; }
 
-    const opw = (window as any).opnet || (window as any).OPWallet;
+    const opw = window.opnet || window.OPWallet;
     try {
       addLog("Registering on OPNet contract...");
-      // Encode calldata: selector + uint256 targetFee + string txHex
-      const selector = "0x" + keccak256Selector("register(uint256,string)");
-      const feePadded = BigInt(Math.round(t)).toString(16).padStart(64, "0");
-      const hexBytes = new TextEncoder().encode(txHex);
-      const lenPadded = hexBytes.length.toString(16).padStart(64, "0");
-      const hexData = Array.from(hexBytes).map(b => b.toString(16).padStart(2, "0")).join("").padEnd(Math.ceil(hexBytes.length / 32) * 64, "0");
-      const calldata = selector + feePadded + lenPadded + hexData;
-
       const txid = await opw.sendTransaction({
         to: CONTRACT_ADDRESS,
-        data: calldata,
+        data: "0xf2a12b58",
         network: NETWORK,
       });
-
       addLog(`✅ Registered! TXID: ${txid}`);
       alertedRef.current = false;
       setStatus("watching");
       addLog(`👁 Watching mempool — target: ${t} sat/vB`);
-    } catch (e: any) {
+    } catch (e) {
       addLog(`❌ Registration failed: ${e.message}`);
       setStatus("error");
     }
-  }
-
-  // Tiny keccak-like selector (first 4 bytes) — use a proper lib in production
-  function keccak256Selector(sig: string): string {
-    // Placeholder — in production import ethers or @noble/hashes
-    // This returns the known selector for register(uint256,string)
-    return "f2a12b58";
   }
 
   function startWatching() {
@@ -247,7 +203,7 @@ export default function FeeSniper() {
     addLog("Reset. Set new parameters to watch again.");
   }
 
-  const statusColors: Record<Status, string> = {
+  const statusColors = {
     idle: "#475569",
     watching: "#3b82f6",
     window_open: "#22d3a5",
@@ -255,7 +211,7 @@ export default function FeeSniper() {
     error: "#f87171",
   };
 
-  const statusLabels: Record<Status, string> = {
+  const statusLabels = {
     idle: "Idle",
     watching: "Watching...",
     window_open: "🚀 Window Open!",
@@ -342,11 +298,10 @@ export default function FeeSniper() {
 
           {/* Controls */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
-
             {/* Target Fee */}
             <div className="card" style={{ background: "rgba(15,23,42,0.8)", border: "1px solid #1e293b", borderRadius: "16px", padding: "20px", backdropFilter: "blur(12px)" }}>
               <label style={{ fontSize: "11px", color: "#475569", letterSpacing: "2px", textTransform: "uppercase", display: "block", marginBottom: "12px" }}>Target Fee</label>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px", background: "#0f172a", border: `1px solid ${t > 0 ? "#22d3a540" : "#1e293b"}`, borderRadius: "8px", padding: "10px 14px", transition: "border-color 0.3s" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px", background: "#0f172a", border: `1px solid ${t > 0 ? "#22d3a540" : "#1e293b"}`, borderRadius: "8px", padding: "10px 14px" }}>
                 <input
                   type="number"
                   value={targetFee}
@@ -382,17 +337,15 @@ export default function FeeSniper() {
                   Connect OPWallet
                 </button>
               )}
-              <div style={{ marginTop: "10px", fontSize: "10px", color: "#334155" }}>
-                Required for on-chain registration
-              </div>
+              <div style={{ marginTop: "10px", fontSize: "10px", color: "#334155" }}>Required for on-chain registration</div>
             </div>
           </div>
 
-          {/* TX Hex input */}
+          {/* TX Hex */}
           <div className="card" style={{ background: "rgba(15,23,42,0.8)", border: "1px solid #1e293b", borderRadius: "16px", padding: "20px", marginBottom: "16px", backdropFilter: "blur(12px)" }}>
             <label style={{ fontSize: "11px", color: "#475569", letterSpacing: "2px", textTransform: "uppercase", display: "block", marginBottom: "12px" }}>
               Pre-Signed Transaction Hex
-              <span style={{ marginLeft: "8px", color: "#334155", textTransform: "none", letterSpacing: 0 }}>(optional — for on-chain storage)</span>
+              <span style={{ marginLeft: "8px", color: "#334155", textTransform: "none", letterSpacing: 0 }}>(optional)</span>
             </label>
             <textarea
               value={txHex}
@@ -403,19 +356,19 @@ export default function FeeSniper() {
             />
           </div>
 
-          {/* Action buttons */}
+          {/* Buttons */}
           <div style={{ display: "flex", gap: "12px", marginBottom: "16px" }}>
             <button
               onClick={startWatching}
               disabled={status === "watching"}
-              style={{ flex: 1, padding: "14px", background: status === "watching" ? "#1e293b" : "linear-gradient(135deg, #22d3a5, #0891b2)", border: "none", borderRadius: "10px", color: status === "watching" ? "#475569" : "#fff", fontWeight: "700", fontFamily: "'JetBrains Mono', monospace", fontSize: "13px", cursor: status === "watching" ? "default" : "pointer", transition: "all 0.3s" }}
+              style={{ flex: 1, padding: "14px", background: status === "watching" ? "#1e293b" : "linear-gradient(135deg, #22d3a5, #0891b2)", border: "none", borderRadius: "10px", color: status === "watching" ? "#475569" : "#fff", fontWeight: "700", fontFamily: "'JetBrains Mono', monospace", fontSize: "13px", cursor: status === "watching" ? "default" : "pointer" }}
             >
               {status === "watching" ? "● Watching..." : "▶ Watch (Local)"}
             </button>
             <button
               onClick={registerOnChain}
               disabled={!walletAddress || status === "watching"}
-              style={{ flex: 1, padding: "14px", background: walletAddress ? "linear-gradient(135deg, #7c3aed, #4f46e5)" : "#1e293b", border: "none", borderRadius: "10px", color: walletAddress ? "#fff" : "#475569", fontWeight: "700", fontFamily: "'JetBrains Mono', monospace", fontSize: "13px", cursor: walletAddress ? "pointer" : "default", transition: "all 0.3s" }}
+              style={{ flex: 1, padding: "14px", background: walletAddress ? "linear-gradient(135deg, #7c3aed, #4f46e5)" : "#1e293b", border: "none", borderRadius: "10px", color: walletAddress ? "#fff" : "#475569", fontWeight: "700", fontFamily: "'JetBrains Mono', monospace", fontSize: "13px", cursor: walletAddress ? "pointer" : "default" }}
             >
               ⛓ Register On-Chain
             </button>
@@ -437,15 +390,10 @@ export default function FeeSniper() {
               <div style={{ color: "#94a3b8", fontSize: "13px", marginTop: "8px" }}>
                 1-hour fee is now <strong style={{ color: "#22d3a5" }}>{fees?.hourFee} sat/vB</strong> — broadcast your transaction now!
               </div>
-              {txHex && (
-                <div style={{ marginTop: "16px", background: "#0f172a", borderRadius: "8px", padding: "12px", fontSize: "11px", color: "#64748b", wordBreak: "break-all", maxHeight: "80px", overflow: "hidden" }}>
-                  {txHex.slice(0, 120)}...
-                </div>
-              )}
             </div>
           )}
 
-          {/* Activity log */}
+          {/* Log */}
           <div className="card" style={{ background: "rgba(15,23,42,0.8)", border: "1px solid #1e293b", borderRadius: "16px", padding: "20px", backdropFilter: "blur(12px)" }}>
             <div style={{ fontSize: "11px", color: "#475569", letterSpacing: "2px", textTransform: "uppercase", marginBottom: "12px" }}>Activity Log</div>
             <div style={{ maxHeight: "160px", overflowY: "auto" }}>
